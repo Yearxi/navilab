@@ -3,8 +3,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""This sub-module contains the functions that are specific to the environment."""
+"""Navigation-specific MDP helpers for NaviLab tasks."""
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .rewards import *  # noqa: F401, F403
+from .nav_mdp import *  # noqa: F401, F403

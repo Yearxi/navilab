@@ -1,3 +1,10 @@
+python scripts/list_envs.py
+python scripts/zero_agent.py --task=Navilab-Jackal-Nav-v0 --num_envs=64
+python scripts/random_agent.py --task=Navilab-Jackal-Nav-v0 --num_envs=64
+python scripts/rsl_rl/play.py --task=Navilab-Jackal-Nav-v0 --num_envs=1 --use_viewer=True
+python scripts/rsl_rl/train.py --task=Navilab-Jackal-Nav-v0 --num_envs=4096
+tensorboard --logdir logs
+
 # Template for Isaac Lab Projects
 
 ## Overview
