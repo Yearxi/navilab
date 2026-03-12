@@ -23,15 +23,25 @@ def lidar_ranges(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg) -> torch.Tens
     """Flattened LiDAR ranges from RayCaster hits.
 
     Distances for rays without hits are set to max_distance.
+    Hits that fall outside the current env's spatial cell (e.g. other envs' obstacles
+    when raycasting sees them) are treated as no-hit so LiDAR stays consistent with collision.
     """
     sensor: RayCaster = env.scene[sensor_cfg.name]
-    hits = sensor.data.ray_hits_w  # (N, B, 3), NaN if no hit
+    hits = sensor.data.ray_hits_w  # (N, B, 3), NaN or inf if no hit
     # distance in XY-plane (navigation style)
     pos = sensor.data.pos_w.unsqueeze(1)
     vec = hits - pos
     dist = torch.linalg.norm(vec[..., :2], dim=-1)
-    # replace NaNs (no hit) with max_distance
+    # replace NaNs/inf (no hit) with max_distance
     dist = torch.where(torch.isfinite(dist), dist, torch.full_like(dist, sensor.cfg.max_distance))
+    # only count hits inside this env's region (radius REGION_RADIUS=8; ignore cross-env "ghost" obstacles)
+    REGION_RADIUS = 8.0
+    origin_xy = env.scene.env_origins[:, :2]  # (N, 2)
+    hit_xy = hits[..., :2]  # (N, B, 2)
+    dist_to_origin = torch.linalg.norm(hit_xy - origin_xy.unsqueeze(1), dim=-1)
+    in_region = dist_to_origin <= REGION_RADIUS
+    valid_hit = torch.isfinite(hits[..., 0])
+    dist = torch.where(valid_hit & in_region, dist, torch.full_like(dist, sensor.cfg.max_distance))
     # normalize to [0, 1] by max_distance
     dist = torch.clamp(dist / sensor.cfg.max_distance, 0.0, 1.0)
     return dist.reshape(env.num_envs, -1)
@@ -90,30 +100,39 @@ def randomize_static_obstacles(
         min_distance_from_robot: Minimum allowed distance to robot in XY.
     """
     robot: Articulation = env.scene["robot"]
-    robot_pos = robot.data.root_pos_w[:, :2]
     static_assets = _collect_obstacle_assets(env, "static_obstacle_")
     if not static_assets:
         return
     low, high = area_xy
     num_envs = env.num_envs
+    effective_ids = (
+        env_ids if env_ids is not None else torch.arange(num_envs, device=env.device)
+    )
+    n = effective_ids.shape[0]
+    env_origins = env.scene.env_origins[effective_ids]  # (n, 3) world position of each env
+    robot_pos_w = robot.data.root_pos_w[effective_ids, :2]  # world XY
     for asset in static_assets:
-        pos_xy = torch.empty(num_envs, 2, device=env.device)
-        pos_xy.uniform_(low, high)
-        # Resample positions that are too close to the robot
-        too_close = torch.norm(pos_xy - robot_pos, dim=-1) < min_distance_from_robot
+        # sample in local frame (relative to env origin)
+        pos_xy_local = torch.empty(n, 2, device=env.device)
+        pos_xy_local.uniform_(low, high)
+        pos_xy_world = env_origins[:, :2] + pos_xy_local
+        too_close = torch.norm(pos_xy_world - robot_pos_w, dim=-1) < min_distance_from_robot
         max_attempts = 10
         for _ in range(max_attempts):
             if not too_close.any():
                 break
             resample = torch.empty(too_close.sum(), 2, device=env.device)
             resample.uniform_(low, high)
-            pos_xy[too_close] = resample
-            too_close = torch.norm(pos_xy - robot_pos, dim=-1) < min_distance_from_robot
-        z = torch.full((num_envs,), 0.5, device=env.device)
-        pos = torch.stack([pos_xy[:, 0], pos_xy[:, 1], z], dim=-1)
-        quat = asset.data.root_link_state_w[:, 3:7].clone()
-        vel = asset.data.root_com_vel_w.clone()
-        root_state = torch.cat([pos, quat, vel], dim=-1)
+            pos_xy_local[too_close] = resample
+            pos_xy_world = env_origins[:, :2] + pos_xy_local
+            too_close = torch.norm(pos_xy_world - robot_pos_w, dim=-1) < min_distance_from_robot
+        z_local = torch.full((n,), 0.5, device=env.device)
+        pos_world = env_origins.clone()
+        pos_world[:, :2] += pos_xy_local
+        pos_world[:, 2] = env_origins[:, 2] + z_local
+        quat = asset.data.root_link_state_w[effective_ids, 3:7].clone()
+        vel = asset.data.root_com_vel_w[effective_ids].clone()
+        root_state = torch.cat([pos_world, quat, vel], dim=-1)
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
 
@@ -131,17 +150,23 @@ def randomize_dynamic_obstacles(
         return
     low, high = area_xy
     num_envs = env.num_envs
+    effective_ids = (
+        env_ids if env_ids is not None else torch.arange(num_envs, device=env.device)
+    )
+    env_origins = env.scene.env_origins[effective_ids]  # (n, 3)
     for asset in dyn_assets:
-        delta_xy = torch.empty(num_envs, 2, device=env.device)
+        pos_world = asset.data.root_link_state_w[effective_ids, :3].clone()
+        pos_local = pos_world - env_origins
+        delta_xy = torch.empty(effective_ids.shape[0], 2, device=env.device)
         delta_xy.uniform_(-1.0, 1.0)
-        pos = asset.data.root_link_state_w[:, :3].clone()
-        pos_xy = pos[:, :2] + delta_xy
-        pos_xy = torch.clamp(pos_xy, low, high)
-        z = pos[:, 2]
-        new_pos = torch.stack([pos_xy[:, 0], pos_xy[:, 1], z], dim=-1)
-        quat = asset.data.root_link_state_w[:, 3:7].clone()
-        vel = asset.data.root_com_vel_w.clone()
-        root_state = torch.cat([new_pos, quat, vel], dim=-1)
+        pos_xy_local = pos_local[:, :2] + delta_xy
+        pos_xy_local = torch.clamp(pos_xy_local, low, high)
+        new_pos_world = env_origins.clone()
+        new_pos_world[:, :2] += pos_xy_local
+        new_pos_world[:, 2] = pos_world[:, 2]
+        quat = asset.data.root_link_state_w[effective_ids, 3:7].clone()
+        vel = asset.data.root_com_vel_w[effective_ids].clone()
+        root_state = torch.cat([new_pos_world, quat, vel], dim=-1)
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
 

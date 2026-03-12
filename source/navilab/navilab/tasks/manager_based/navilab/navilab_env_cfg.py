@@ -62,13 +62,13 @@ class NavSceneCfg(InteractiveSceneCfg):
 
     lidar_2d = MultiMeshRayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base_link",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.3, 0.0, 0.4)),
-        ray_alignment="base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.3, 0.0, 0.2)),
+        ray_alignment="yaw",
         pattern_cfg=patterns.LidarPatternCfg(
             channels=1,
             vertical_fov_range=(0.0, 0.0),
             horizontal_fov_range=(-135.0, 135.0),
-            horizontal_res=0.5,
+            horizontal_res=1,
         ),
         max_distance=20.0,
         mesh_prim_paths=["/World/ground", "{ENV_REGEX_NS}/obstacles_static_box_.*", "{ENV_REGEX_NS}/obstacles_dynamic_box_.*"],
@@ -145,9 +145,13 @@ class NavSceneCfg(InteractiveSceneCfg):
 ##
 
 
+# Region radius for each env (circle radius 8); goal and obstacles use box [-8, 8] in x, y.
+REGION_RADIUS = 8.0
+
+
 @configclass
 class CommandsCfg:
-    """Goal command for navigation."""
+    """Goal command for navigation (within region radius 8)."""
 
     goal_2d = UniformPose2dCommandCfg(
         asset_name="robot",
@@ -155,8 +159,8 @@ class CommandsCfg:
         debug_vis=True,
         resampling_time_range=(1000.0, 1000.0),
         ranges=UniformPose2dCommandCfg.Ranges(
-            pos_x=(-8.0, 8.0),
-            pos_y=(-8.0, 8.0),
+            pos_x=(-REGION_RADIUS, REGION_RADIUS),
+            pos_y=(-REGION_RADIUS, REGION_RADIUS),
             heading=(-math.pi, math.pi),
         ),
     )
@@ -197,8 +201,8 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "pose_range": {
-                "x": (-2.0, 2.0),
-                "y": (-2.0, 2.0),
+                "x": (-REGION_RADIUS, REGION_RADIUS),
+                "y": (-REGION_RADIUS, REGION_RADIUS),
                 "yaw": (-math.pi, math.pi),
             },
             "velocity_range": {
@@ -211,16 +215,17 @@ class EventCfg:
             },
         },
     )
+    # Obstacles within region radius 8 (box [-8, 8] in x, y).
     randomize_static_obstacles = EventTerm(
         func=mdp.randomize_static_obstacles,
         mode="reset",
-        params={"area_xy": (-8.0, 8.0), "min_distance_from_robot": 1.0},
+        params={"area_xy": (-REGION_RADIUS, REGION_RADIUS), "min_distance_from_robot": 1.0},
     )
     randomize_dynamic_obstacles = EventTerm(
         func=mdp.randomize_dynamic_obstacles,
         mode="interval",
         interval_range_s=(3.0, 6.0),
-        params={"area_xy": (-8.0, 8.0)},
+        params={"area_xy": (-REGION_RADIUS, REGION_RADIUS)},
     )
 
 
@@ -265,11 +270,11 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    """Curriculum (distance to goal)."""
+    """Curriculum (distance to goal within region radius 8)."""
 
     goal_distance = CurrTerm(
         func=mdp.goal_distance_curriculum,
-        params={"min_radius": 2.0, "max_radius": 8.0},
+        params={"min_radius": 2.0, "max_radius": REGION_RADIUS},
     )
 
 
@@ -298,7 +303,8 @@ class ActionsCfg:
 class NavEnvCfg(ManagerBasedRLEnvCfg):
     """Base navigation env: scene with robot=MISSING, shared MDP. Child envs set scene.robot and may override actions."""
 
-    scene: NavSceneCfg = NavSceneCfg(num_envs=1024, env_spacing=4.0)
+    # Each env runs in a circle of radius REGION_RADIUS=8; env_spacing=16 so envs do not overlap.
+    scene: NavSceneCfg = NavSceneCfg(num_envs=1024, env_spacing=16.0)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     commands: CommandsCfg = CommandsCfg()

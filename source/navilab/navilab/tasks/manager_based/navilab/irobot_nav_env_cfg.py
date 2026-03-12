@@ -59,5 +59,5 @@ class RidgebackActionsCfg(ActionsCfg):
 class IRobotNavEnvCfg(NavEnvCfg):
     """Ridgeback UR navigation: virtual/dummy joints, NonHolonomicAction."""
 
-    scene: RidgebackSceneCfg = RidgebackSceneCfg(num_envs=1024, env_spacing=4.0)
+    scene: RidgebackSceneCfg = RidgebackSceneCfg(num_envs=1024, env_spacing=16.0)
     actions: RidgebackActionsCfg = RidgebackActionsCfg()
