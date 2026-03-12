@@ -13,19 +13,10 @@ from isaaclab.sensors import ContactSensor, RayCaster
 def goal_relative_pose(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     """Goal position and heading relative to robot base: (x, y, yaw_error)."""
     command = env.command_manager.get_term(command_name)
-    # UniformPose2dCommand.command is (x_rel, y_rel, z_rel, heading_rel) in base frame
     cmd_b = command.command
-    rel_xy = cmd_b[:, :2]
-    rel_yaw = cmd_b[:, 3].unsqueeze(-1)
-    return torch.cat([rel_xy, rel_yaw], dim=-1)
-
-
-def robot_pose_2d(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Robot pose in world frame: (x, y, heading)."""
-    robot: Articulation = env.scene[asset_cfg.name]
-    pos = robot.data.root_pos_w[:, :2]
-    heading = robot.data.heading_w.unsqueeze(-1)
-    return torch.cat([pos, heading], dim=-1)
+    cmd_xy = cmd_b[:, :2]
+    cmd_yaw = cmd_b[:, 3].unsqueeze(-1)
+    return torch.cat([cmd_xy, cmd_yaw], dim=-1)
 
 
 def lidar_ranges(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -106,14 +97,23 @@ def randomize_static_obstacles(
     low, high = area_xy
     num_envs = env.num_envs
     for asset in static_assets:
-        r = torch.empty(num_envs, 2, device=env.device)
-        pos_xy = r.uniform_(low, high)
-        too_close = (torch.norm(pos_xy - robot_pos, dim=-1) < min_distance_from_robot)
-        pos_xy[too_close] = torch.tensor([high + 5.0, high + 5.0], device=env.device)
+        pos_xy = torch.empty(num_envs, 2, device=env.device)
+        pos_xy.uniform_(low, high)
+        # Resample positions that are too close to the robot
+        too_close = torch.norm(pos_xy - robot_pos, dim=-1) < min_distance_from_robot
+        max_attempts = 10
+        for _ in range(max_attempts):
+            if not too_close.any():
+                break
+            resample = torch.empty(too_close.sum(), 2, device=env.device)
+            resample.uniform_(low, high)
+            pos_xy[too_close] = resample
+            too_close = torch.norm(pos_xy - robot_pos, dim=-1) < min_distance_from_robot
         z = torch.full((num_envs,), 0.5, device=env.device)
         pos = torch.stack([pos_xy[:, 0], pos_xy[:, 1], z], dim=-1)
-        quat = asset.data.root_link_state_w[:, 3:7]
-        root_state = torch.cat([pos, quat, asset.data.root_com_velocity_w], dim=-1)
+        quat = asset.data.root_link_state_w[:, 3:7].clone()
+        vel = asset.data.root_com_vel_w.clone()
+        root_state = torch.cat([pos, quat, vel], dim=-1)
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
 
@@ -132,15 +132,16 @@ def randomize_dynamic_obstacles(
     low, high = area_xy
     num_envs = env.num_envs
     for asset in dyn_assets:
-        r = torch.empty(num_envs, 2, device=env.device)
-        delta_xy = r.uniform_(-1.0, 1.0)
-        pos = asset.data.root_link_state_w[:, :3]
+        delta_xy = torch.empty(num_envs, 2, device=env.device)
+        delta_xy.uniform_(-1.0, 1.0)
+        pos = asset.data.root_link_state_w[:, :3].clone()
         pos_xy = pos[:, :2] + delta_xy
         pos_xy = torch.clamp(pos_xy, low, high)
-        z = torch.full((num_envs,), pos[:, 2].mean(), device=env.device)
+        z = pos[:, 2]
         new_pos = torch.stack([pos_xy[:, 0], pos_xy[:, 1], z], dim=-1)
-        quat = asset.data.root_link_state_w[:, 3:7]
-        root_state = torch.cat([new_pos, quat, asset.data.root_com_velocity_w], dim=-1)
+        quat = asset.data.root_link_state_w[:, 3:7].clone()
+        vel = asset.data.root_com_vel_w.clone()
+        root_state = torch.cat([new_pos, quat, vel], dim=-1)
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
 
@@ -165,19 +166,31 @@ def success_reward(env: ManagerBasedRLEnv, command_name: str, threshold: float =
     return reached.float()
 
 
+def illegal_contact_xy(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_sensor"),
+    threshold: float = 1.0,
+) -> torch.Tensor:
+    """Terminate when the horizontal (xy) contact force on the sensor exceeds the force threshold."""
+    contact_sensor: ContactSensor = env.scene[sensor_cfg.name]
+    net_contact_forces = contact_sensor.data.net_forces_w_history  # (N, T, B, 3)
+    if net_contact_forces is None or net_contact_forces.numel() == 0:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    forces_xy = net_contact_forces[:, :, sensor_cfg.body_ids, :2]  # (N, T, B, 2)
+    force_xy_norm = torch.linalg.norm(forces_xy, dim=-1)  # (N, T, B)
+    return torch.any(
+        torch.max(force_xy_norm, dim=1)[0] > threshold,
+        dim=1,
+    )
+
+
 def collision_penalty(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_sensor"),
     threshold: float = 1.0,
 ) -> torch.Tensor:
-    """Binary collision indicator from contact sensor."""
-    sensor: ContactSensor = env.scene[sensor_cfg.name]
-    # reuse illegal_contact logic to detect contacts
-    mask = base_terminations.illegal_contact(
-        env,
-        sensor_cfg=sensor_cfg,
-        threshold=threshold,
-    )
+    """Binary collision indicator from contact sensor (horizontal xy force only)."""
+    mask = illegal_contact_xy(env, sensor_cfg=sensor_cfg, threshold=threshold)
     return mask.float()
 
 

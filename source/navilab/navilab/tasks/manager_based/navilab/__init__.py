@@ -13,21 +13,11 @@ from . import agents
 
 
 gym.register(
-    id="Template-Navilab-v0",
+    id="Navilab-IRobot-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.navilab_env_cfg:NavilabEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
-    },
-)
-
-gym.register(
-    id="Navilab-Jackal-Nav-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.jackal_nav_env_cfg:JackalNavEnvCfg",
+        "env_cfg_entry_point": f"{__name__}.irobot_nav_env_cfg:IRobotNavEnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
 )

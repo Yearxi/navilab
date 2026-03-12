@@ -83,7 +83,6 @@ class DiffDriveWheelVelocityAction(ActionTerm):
         left_ang = (v - omega * L / 2) / r
         right_ang = (v + omega * L / 2) / r
         n_left = len(self._left_joint_ids)
-        # _joint_ids order is [left0, left1, right0, right1] so columns 0..n_left-1 = left, n_left.. = right
         for i in range(n_left):
             self._wheel_velocities[:, i] = left_ang
         for i in range(n_left, len(self._joint_ids)):
