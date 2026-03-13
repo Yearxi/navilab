@@ -27,7 +27,6 @@ from isaaclab.managers import (
 )
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
-from isaaclab.sensors.ray_caster import MultiMeshRayCasterCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
@@ -60,7 +59,9 @@ class NavSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = MISSING
 
-    lidar_2d = MultiMeshRayCasterCfg(
+    # Use basic RayCasterCfg for compatibility with Isaac Lab versions
+    # that do not provide MultiMeshRayCasterCfg.
+    lidar_2d = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base_link",
         offset=RayCasterCfg.OffsetCfg(pos=(0.3, 0.0, 0.2)),
         ray_alignment="yaw",
@@ -122,21 +123,13 @@ class NavSceneCfg(InteractiveSceneCfg):
                     ),
                 ),
             )
+        # For compatibility with Isaac Lab versions without MultiMeshRayCasterCfg,
+        # we only use string-based mesh patterns here.
         mesh_paths = ["/World/ground"]
         if num_static > 0:
-            mesh_paths.append(
-                MultiMeshRayCasterCfg.RaycastTargetCfg(
-                    prim_expr="{ENV_REGEX_NS}/obstacles_static_box_.*",
-                    track_mesh_transforms=True,
-                )
-            )
+            mesh_paths.append("{ENV_REGEX_NS}/obstacles_static_box_.*")
         if num_dynamic > 0:
-            mesh_paths.append(
-                MultiMeshRayCasterCfg.RaycastTargetCfg(
-                    prim_expr="{ENV_REGEX_NS}/obstacles_dynamic_box_.*",
-                    track_mesh_transforms=True,
-                )
-            )
+            mesh_paths.append("{ENV_REGEX_NS}/obstacles_dynamic_box_.*")
         self.lidar_2d.mesh_prim_paths = mesh_paths
 
 
@@ -264,7 +257,7 @@ class TerminationsCfg:
     collision = DoneTerm(
         func=mdp.illegal_contact_xy,
         time_out=False,
-        params={"sensor_cfg": SceneEntityCfg("contact_sensor"), "threshold": 5.0},
+        params={"sensor_cfg": SceneEntityCfg("contact_sensor"), "threshold": 50.0},
     )
 
 
