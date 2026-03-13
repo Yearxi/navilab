@@ -27,6 +27,7 @@ from isaaclab.managers import (
 )
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
+from isaaclab.sensors.ray_caster import MultiMeshRayCasterCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
@@ -59,9 +60,7 @@ class NavSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = MISSING
 
-    # Use basic RayCasterCfg for compatibility with Isaac Lab versions
-    # that do not provide MultiMeshRayCasterCfg.
-    lidar_2d = RayCasterCfg(
+    lidar_2d = MultiMeshRayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base_link",
         offset=RayCasterCfg.OffsetCfg(pos=(0.3, 0.0, 0.2)),
         ray_alignment="yaw",
@@ -72,9 +71,7 @@ class NavSceneCfg(InteractiveSceneCfg):
             horizontal_res=1,
         ),
         max_distance=20.0,
-        # Older Isaac Lab RayCaster implementations only support a single mesh prim.
-        # We use a single regex that covers all static obstacles; ground hits are optional.
-        mesh_prim_paths="{ENV_REGEX_NS}/obstacles_static_box_.*",
+        mesh_prim_paths=["/World/ground", "{ENV_REGEX_NS}/obstacles_static_box_.*", "{ENV_REGEX_NS}/obstacles_dynamic_box_.*"],
         debug_vis=True,
     )
 
@@ -125,10 +122,22 @@ class NavSceneCfg(InteractiveSceneCfg):
                     ),
                 ),
             )
-        # For older RayCaster implementations that only support a single mesh prim,
-        # we keep using the single regex configured in the lidar_2d definition.
-        # If needed in the future, this can be extended with a version check and
-        # switched back to MultiMeshRayCasterCfg on newer Isaac Lab versions.
+        mesh_paths = ["/World/ground"]
+        if num_static > 0:
+            mesh_paths.append(
+                MultiMeshRayCasterCfg.RaycastTargetCfg(
+                    prim_expr="{ENV_REGEX_NS}/obstacles_static_box_.*",
+                    track_mesh_transforms=True,
+                )
+            )
+        if num_dynamic > 0:
+            mesh_paths.append(
+                MultiMeshRayCasterCfg.RaycastTargetCfg(
+                    prim_expr="{ENV_REGEX_NS}/obstacles_dynamic_box_.*",
+                    track_mesh_transforms=True,
+                )
+            )
+        self.lidar_2d.mesh_prim_paths = mesh_paths
 
 
 ##
