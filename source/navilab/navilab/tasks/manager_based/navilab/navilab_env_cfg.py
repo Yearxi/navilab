@@ -72,7 +72,9 @@ class NavSceneCfg(InteractiveSceneCfg):
             horizontal_res=1,
         ),
         max_distance=20.0,
-        mesh_prim_paths=["/World/ground", "{ENV_REGEX_NS}/obstacles_static_box_.*", "{ENV_REGEX_NS}/obstacles_dynamic_box_.*"],
+        # Older Isaac Lab RayCaster implementations only support a single mesh prim.
+        # We use a single regex that covers all static obstacles; ground hits are optional.
+        mesh_prim_paths="{ENV_REGEX_NS}/obstacles_static_box_.*",
         debug_vis=True,
     )
 
@@ -123,14 +125,10 @@ class NavSceneCfg(InteractiveSceneCfg):
                     ),
                 ),
             )
-        # For compatibility with Isaac Lab versions without MultiMeshRayCasterCfg,
-        # we only use string-based mesh patterns here.
-        mesh_paths = ["/World/ground"]
-        if num_static > 0:
-            mesh_paths.append("{ENV_REGEX_NS}/obstacles_static_box_.*")
-        if num_dynamic > 0:
-            mesh_paths.append("{ENV_REGEX_NS}/obstacles_dynamic_box_.*")
-        self.lidar_2d.mesh_prim_paths = mesh_paths
+        # For older RayCaster implementations that only support a single mesh prim,
+        # we keep using the single regex configured in the lidar_2d definition.
+        # If needed in the future, this can be extended with a version check and
+        # switched back to MultiMeshRayCasterCfg on newer Isaac Lab versions.
 
 
 ##
